@@ -170,6 +170,16 @@ CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = False
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Boutique API", "VERSION": "1.0.0",
-    "DESCRIPTION": "Catálogo y gestión de prendas con JWT",
+    "TITLE": "Boutique API",
+    "VERSION": "1.0.0",
+    "AUTHENTICATION_WHITELIST": [],
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+            }
+        }
+    },
 }

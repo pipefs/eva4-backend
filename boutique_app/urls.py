@@ -1,6 +1,8 @@
 from django.urls import path
 from . import views
 
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+
 urlpatterns = [
     path("", views.catalogo, name="catalogo"),
     path("login/", views.login, name="login"),
@@ -23,4 +25,8 @@ urlpatterns = [
 
     # API POST, PUT y DELETE
     path("api/prendas/<int:id>/", views.PrendasAPI.as_view(), name='api_prendas_detalles'),
+
+    # SWAGGER
+    path("api/schema/", SpectacularAPIView.as_view(), name="api_schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="api_schema"), name="api_docs"),
 ]

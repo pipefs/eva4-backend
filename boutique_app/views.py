@@ -28,6 +28,9 @@ from .decoradores import sesion_requerida
 from .autenticacion import AutenticacionSesionJWT
 from .models import Prenda, SesionAcceso
 
+# SWAGGER
+from drf_spectacular.utils import extend_schema
+
 @ensure_csrf_cookie
 def login(request):
     return render(request, 'boutique_app/login.html')
@@ -70,15 +73,78 @@ def poner_cookie_refresh(respuesta, refresh):
         value=str(refresh),
         max_age=7 * 24 * 60 * 60,
         httponly=True,
-        secure=False,  # True cuando publiques con HTTPS
+        secure=False,
         samesite="Lax",
     )
+
+ESQUEMA_LOGIN = {
+    "type": "object",
+    "required": ["username", "password"],
+    "properties": {
+        "username": {"type": "string"},
+        "password": {"type": "string", "format": "password"},
+    },
+}
+
+ESQUEMA_PRENDA_ENTRADA = {
+    "type": "object",
+    "required": [
+        "nombre", "categoria", "color", "talla", "precio", "stock"
+    ],
+    "properties": {
+        "nombre": {"type": "string", "maxLength": 20},
+        "descripcion": {"type": "string", "nullable": True},
+        "categoria": {
+            "type": "string",
+            "enum": ["polera", "chaleco", "camisa", "chaqueta"],
+        },
+        "color": {"type": "string", "example": "#0000FF"},
+        "talla": {
+            "type": "string",
+            "enum": ["xs", "s", "m", "l", "xl", "xxl"],
+        },
+        "precio": {"type": "string", "example": "12990.00"},
+        "stock": {"type": "integer", "minimum": 0},
+    },
+}
+
+ESQUEMA_PRENDA_SALIDA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "integer"},
+        **ESQUEMA_PRENDA_ENTRADA["properties"],
+        "creado": {"type": "string", "format": "date-time"},
+        "actualizado": {"type": "string", "format": "date-time"},
+    },
+}
+
+ESQUEMA_ERROR = {
+    "type": "object",
+    "description": "Mensaje de error o errores por campo.",
+}
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginAPI(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Iniciar sesión",
+        request={"application/json": ESQUEMA_LOGIN},
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "mensaje": {"type": "string"},
+                    "usuario": {"type": "string"},
+                    "access": {"type": "string"},
+                },
+            },
+            400: ESQUEMA_ERROR,
+            401: ESQUEMA_ERROR,
+        },
+        auth=[],
+    )
     def post(self, request):
         username = request.data.get("username")
         password = request.data.get("password")
@@ -98,8 +164,6 @@ class LoginAPI(APIView):
             )
 
         with transaction.atomic():
-            # El valor inicial sólo permite crear la fila; se reemplaza
-            # inmediatamente por el jti del Refresh real.
             sesion = SesionAcceso.objects.create(
                 usuario=usuario,
                 refresh_jti=str(uuid.uuid4()),
@@ -111,7 +175,6 @@ class LoginAPI(APIView):
             sesion.expira = expiracion_refresh(refresh)
             sesion.save(update_fields=["refresh_jti", "expira"])
 
-        # Crea la sesión Django para las páginas HTML.
         iniciar_sesion(request._request, usuario)
         request._request.session["sid"] = str(sesion.id)
 
@@ -132,6 +195,19 @@ class RenovarTokenAPI(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Renovar Access Token",
+        request=None,
+        responses={
+            200: {
+                "type": "object",
+                "properties": {"access": {"type": "string"}},
+            },
+            401: ESQUEMA_ERROR,
+            403: ESQUEMA_ERROR,
+        },
+        auth=[],
+    )
     def post(self, request):
         texto_refresh = request.COOKIES.get("refresh_token")
 
@@ -170,7 +246,6 @@ class RenovarTokenAPI(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            # Invalida el Refresh anterior.
             refresh_anterior.blacklist()
 
             refresh_nuevo = crear_refresh(sesion.usuario, sesion)
@@ -190,6 +265,20 @@ class VerSesionAPI(APIView):
     authentication_classes = [AutenticacionSesionJWT]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Consultar sesión",
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "usuario": {"type": "string"},
+                    "sesion": {"type": "string", "format": "uuid"},
+                },
+            },
+            401: ESQUEMA_ERROR,
+        },
+        auth=[{"bearerAuth": []}],
+    )
     def get(self, request):
         return Response(
             {
@@ -205,6 +294,12 @@ class LogoutAPI(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Cerrar sesión",
+        request=None,
+        responses={204: None, 403: ESQUEMA_ERROR},
+        auth=[],
+    )
     def post(self, request):
         sid = request._request.session.get("sid")
         texto_refresh = request.COOKIES.get("refresh_token")
@@ -232,6 +327,19 @@ class LogoutAPI(APIView):
 class CatalogoAPI(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Consultar catálogo público",
+        responses={
+            200: {
+                "oneOf": [
+                    {"type": "array", "items": ESQUEMA_PRENDA_SALIDA},
+                    ESQUEMA_PRENDA_SALIDA,
+                ]
+            },
+            404: ESQUEMA_ERROR,
+        },
+        auth=[],
+    )
     def get(self, request, id=None):
         if id is not None:
             prenda = get_object_or_404(Prenda, id=id)
@@ -273,8 +381,6 @@ def validar_prenda(prenda):
         raise ValidationError({"nombre": "Escribe un nombre válido."})
 
     prenda.nombre = prenda.nombre.strip()
-
-    # Valida tipos, longitud, choices y campos del modelo.
     prenda.full_clean()
 
     if prenda.precio <= 0:
@@ -284,6 +390,20 @@ class PrendasAPI(APIView):
     authentication_classes = [AutenticacionSesionJWT]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Listar prendas o consultar una por ID",
+        responses={
+            200: {
+                "oneOf": [
+                    {"type": "array", "items": ESQUEMA_PRENDA_SALIDA},
+                    ESQUEMA_PRENDA_SALIDA,
+                ]
+            },
+            401: ESQUEMA_ERROR,
+            404: ESQUEMA_ERROR,
+        },
+        auth=[{"bearerAuth": []}],
+    )
     def get(self, request, id=None):
             if id is not None:
                 prenda = get_object_or_404(Prenda, id=id)
@@ -320,6 +440,16 @@ class PrendasAPI(APIView):
     
             return Response(datos, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        summary="Crear prenda",
+        request={"application/json": ESQUEMA_PRENDA_ENTRADA},
+        responses={
+            201: ESQUEMA_PRENDA_SALIDA,
+            400: ESQUEMA_ERROR,
+            401: ESQUEMA_ERROR,
+        },
+        auth=[{"bearerAuth": []}],
+    )
     def post(self, request):
         datos = request.data
 
@@ -377,6 +507,17 @@ class PrendasAPI(APIView):
             }
         }, status=status.HTTP_201_CREATED)
 
+    @extend_schema(
+        summary="Actualizar prenda por ID",
+        request={"application/json": ESQUEMA_PRENDA_ENTRADA},
+        responses={
+            200: ESQUEMA_PRENDA_SALIDA,
+            400: ESQUEMA_ERROR,
+            401: ESQUEMA_ERROR,
+            404: ESQUEMA_ERROR,
+        },
+        auth=[{"bearerAuth": []}],
+    )
     def put(self, request, id):
         prenda = get_object_or_404(Prenda, id=id)
         datos = request.data
@@ -433,6 +574,19 @@ class PrendasAPI(APIView):
             }
         }, status=status.HTTP_200_OK)
 
+
+    @extend_schema(
+        summary="Eliminar prenda por ID",
+        responses={
+            200: {
+                "type": "object",
+                "properties": {"mensaje": {"type": "string"}},
+            },
+            401: ESQUEMA_ERROR,
+            404: ESQUEMA_ERROR,
+        },
+        auth=[{"bearerAuth": []}],
+    )
     def delete(self, request, id):
         prenda = get_object_or_404(Prenda, id=id)
         prenda.delete()
