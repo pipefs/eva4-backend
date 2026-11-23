@@ -40,7 +40,13 @@ INSTALLED_APPS = [
 
     # REST Framework
     'rest_framework',
-    'rest_framework.authtoken',
+    #'rest_framework.authtoken',
+
+    # Simple JWT
+    'rest_framework_simplejwt.token_blacklist',
+
+    # Docs
+    'drf_spectacular',
 
     # App
     'boutique_app'
@@ -85,7 +91,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": "boutique_ropa",
         "USER": "root",
-        "PASSWORD": "",
+        "PASSWORD": "0389",
         "HOST": "127.0.0.1",
         "PORT": "3306",
     }
@@ -140,4 +146,23 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "ROTATE_REFRESH_TOKENS": False,
+}
+
+SESSION_COOKIE_AGE = 7 * 24 * 60 * 60
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Boutique API", "VERSION": "1.0.0",
+    "DESCRIPTION": "Catálogo y gestión de prendas con JWT",
 }
