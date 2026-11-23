@@ -12,6 +12,9 @@ urlpatterns = [
 
     # API Autenticacion
     path("api/login/", views.LoginAPI.as_view(), name='api_login'),
+    path("api/token/refresh/", views.RenovarTokenAPI.as_view(), name="api_token_refresh"),
+    path("api/sesion/", views.VerSesionAPI.as_view(), name="api_sesion"),
+    path("api/logout/", views.LogoutAPI.as_view(), name="api_logout"),
 
     # API GET
     path("api/catalogo/", views.CatalogoAPI.as_view(), name='api_catalogo'),

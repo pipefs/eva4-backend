@@ -6,11 +6,25 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.authtoken.models import Token
-from rest_framework.authentication import TokenAuthentication
 
-from .models import Prenda
+import uuid
+from datetime import datetime, timezone as zona_utc
 
+from django.contrib.auth import login as iniciar_sesion
+from django.contrib.auth import logout as cerrar_sesion
+from django.db import transaction
+from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from .autenticacion import AutenticacionSesionJWT
+from .models import Prenda, SesionAcceso
+
+@ensure_csrf_cookie
 def login(request):
     return render(request, 'boutique_app/login.html')
 
@@ -32,25 +46,180 @@ def editar(request, id):
 def eliminar(request, id):
     return render(request, 'boutique_app/eliminar.html')
 
+
+def crear_refresh(usuario, sesion):
+    refresh = RefreshToken.for_user(usuario)
+    refresh["sid"] = str(sesion.id)
+    return refresh
+
+
+def expiracion_refresh(refresh):
+    return datetime.fromtimestamp(refresh["exp"], tz=zona_utc.utc)
+
+def poner_cookie_refresh(respuesta, refresh):
+    respuesta.set_cookie(
+        key="refresh_token",
+        value=str(refresh),
+        max_age=7 * 24 * 60 * 60,
+        httponly=True,
+        secure=False,  # True cuando publiques con HTTPS
+        samesite="Lax",
+    )
+
+@method_decorator(csrf_protect, name="dispatch")
 class LoginAPI(APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
+        username = request.data.get("username")
+        password = request.data.get("password")
+
+        if not username or not password:
+            return Response(
+                {"error": "Debes ingresar usuario y contraseña."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         usuario = authenticate(username=username, password=password)
 
-        if usuario is not None:
-            token, creado = Token.objects.get_or_create(user=usuario)
+        if usuario is None:
+            return Response(
+                {"error": "Usuario o contraseña incorrectos."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
-            return Response({
-                'mensaje': 'Autenticación correcta!',
-                'usuario': usuario.username,
-                'token': token.key
-            }, status=status.HTTP_200_OK)
+        with transaction.atomic():
+            # El valor inicial sólo permite crear la fila; se reemplaza
+            # inmediatamente por el jti del Refresh real.
+            sesion = SesionAcceso.objects.create(
+                usuario=usuario,
+                refresh_jti=str(uuid.uuid4()),
+                expira=timezone.now() + timezone.timedelta(days=7),
+            )
 
-        return Response({'error': 'Usuario o contraseña incorrectos.'}, status=status.HTTP_401_UNAUTHORIZED)
+            refresh = crear_refresh(usuario, sesion)
+            sesion.refresh_jti = str(refresh["jti"])
+            sesion.expira = expiracion_refresh(refresh)
+            sesion.save(update_fields=["refresh_jti", "expira"])
+
+        # Crea la sesión Django para las páginas HTML.
+        iniciar_sesion(request._request, usuario)
+        request._request.session["sid"] = str(sesion.id)
+
+        respuesta = Response(
+            {
+                "mensaje": "Autenticación correcta.",
+                "usuario": usuario.username,
+                "access": str(refresh.access_token),
+            },
+            status=status.HTTP_200_OK,
+        )
+        poner_cookie_refresh(respuesta, refresh)
+        return respuesta
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class RenovarTokenAPI(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        texto_refresh = request.COOKIES.get("refresh_token")
+
+        if not texto_refresh:
+            return Response(
+                {"error": "Falta el Refresh Token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            refresh_anterior = RefreshToken(texto_refresh)
+            sid = uuid.UUID(str(refresh_anterior["sid"]))
+            usuario_id = refresh_anterior["user_id"]
+            jti_anterior = str(refresh_anterior["jti"])
+        except (TokenError, KeyError, TypeError, ValueError, AttributeError):
+            return Response(
+                {"error": "Refresh Token inválido o vencido."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        with transaction.atomic():
+            sesion = (
+                SesionAcceso.objects.select_for_update()
+                .select_related("usuario")
+                .filter(id=sid, usuario_id=usuario_id)
+                .first()
+            )
+
+            if (
+                sesion is None
+                or not sesion.activa
+                or sesion.refresh_jti != jti_anterior
+            ):
+                return Response(
+                    {"error": "Sesión vencida, revocada o ya renovada."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            # Invalida el Refresh anterior.
+            refresh_anterior.blacklist()
+
+            refresh_nuevo = crear_refresh(sesion.usuario, sesion)
+            sesion.refresh_jti = str(refresh_nuevo["jti"])
+            sesion.expira = expiracion_refresh(refresh_nuevo)
+            sesion.save(update_fields=["refresh_jti", "expira"])
+
+        respuesta = Response(
+            {"access": str(refresh_nuevo.access_token)},
+            status=status.HTTP_200_OK,
+        )
+        poner_cookie_refresh(respuesta, refresh_nuevo)
+        return respuesta
+
+
+class VerSesionAPI(APIView):
+    authentication_classes = [AutenticacionSesionJWT]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            {
+                "usuario": request.user.username,
+                "sesion": request.auth["sid"],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class LogoutAPI(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        sid = request._request.session.get("sid")
+        texto_refresh = request.COOKIES.get("refresh_token")
+
+        if sid and request._request.user.is_authenticated:
+            SesionAcceso.objects.filter(
+                id=sid,
+                usuario=request._request.user,
+                revocada__isnull=True,
+            ).update(revocada=timezone.now())
+
+        if texto_refresh:
+            try:
+                RefreshToken(texto_refresh).blacklist()
+            except TokenError:
+                pass
+
+        cerrar_sesion(request._request)
+
+        respuesta = Response(status=status.HTTP_204_NO_CONTENT)
+        respuesta.delete_cookie("refresh_token", samesite="Lax")
+        return respuesta
+
 
 class CatalogoAPI(APIView):
     permission_classes = [AllowAny]
@@ -92,7 +261,7 @@ class CatalogoAPI(APIView):
         return Response(datos, status=status.HTTP_200_OK)
 
 class PrendasAPI(APIView):
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [AutenticacionSesionJWT]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id=None):
