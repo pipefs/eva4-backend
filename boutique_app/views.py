@@ -1,4 +1,5 @@
-from django.shortcuts import render, redirect, get_object_or_404
+from django.shortcuts import render, get_object_or_404
+from django.core.exceptions import ValidationError
 from django.contrib.auth import authenticate
 
 # REST Framework
@@ -267,6 +268,18 @@ class CatalogoAPI(APIView):
 
         return Response(datos, status=status.HTTP_200_OK)
 
+def validar_prenda(prenda):
+    if not isinstance(prenda.nombre, str) or not prenda.nombre.strip():
+        raise ValidationError({"nombre": "Escribe un nombre válido."})
+
+    prenda.nombre = prenda.nombre.strip()
+
+    # Valida tipos, longitud, choices y campos del modelo.
+    prenda.full_clean()
+
+    if prenda.precio <= 0:
+        raise ValidationError({"precio": "El precio debe ser mayor que cero."})
+
 class PrendasAPI(APIView):
     authentication_classes = [AutenticacionSesionJWT]
     permission_classes = [IsAuthenticated]
@@ -330,7 +343,7 @@ class PrendasAPI(APIView):
                 'campos': faltantes
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        prenda = Prenda.objects.create(
+        prenda = Prenda(
             nombre=datos.get('nombre'),
             descripcion=datos.get('descripcion'),
             categoria=datos.get('categoria'),
@@ -339,6 +352,16 @@ class PrendasAPI(APIView):
             precio=datos.get('precio'),
             stock=datos.get('stock')
         )
+
+        try:
+            validar_prenda(prenda)
+        except ValidationError as error:
+            return Response(
+                {"errores": error.message_dict},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        prenda.save()
 
         return Response({
             'mensaje': 'Prenda creada correctamente.',
@@ -385,6 +408,14 @@ class PrendasAPI(APIView):
         prenda.talla = datos.get('talla')
         prenda.precio = datos.get('precio')
         prenda.stock = datos.get('stock')
+
+        try:
+            validar_prenda(prenda)
+        except ValidationError as error:
+            return Response(
+                {"errores": error.message_dict},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         prenda.save()
 
