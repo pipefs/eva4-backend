@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
+# JWT
 import uuid
 from datetime import datetime, timezone as zona_utc
 
@@ -21,6 +22,8 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .decoradores import sesion_requerida
+
 from .autenticacion import AutenticacionSesionJWT
 from .models import Prenda, SesionAcceso
 
@@ -31,18 +34,22 @@ def login(request):
 def catalogo(request):
     return render(request, 'boutique_app/catalogo.html')
 
+@sesion_requerida
 def gestion(request):
     return render(request, 'boutique_app/gestion.html')
 
 def detalle(request, id):
     return render(request, 'boutique_app/detalle.html')
 
+@sesion_requerida
 def crear(request):
     return render(request, 'boutique_app/crear.html')
 
+@sesion_requerida
 def editar(request, id):
     return render(request, 'boutique_app/editar.html')
 
+@sesion_requerida
 def eliminar(request, id):
     return render(request, 'boutique_app/eliminar.html')
 
