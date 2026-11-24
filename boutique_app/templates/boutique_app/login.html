@@ -7,6 +7,8 @@ Boutique{% endblock %} {% block content %}
     <p class="form-intro">Accede para administrar el inventario de Boutique.</p>
 
     <form id="login-form" novalidate>
+      {% csrf_token %}
+      
       <div class="field">
         <label for="username">Usuario</label>
         <input
@@ -67,6 +69,9 @@ Boutique{% endblock %} {% block content %}
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
+            "X-CSRFToken": form.querySelector(
+              'input[name="csrfmiddlewaretoken"]'
+            ).value,
           },
           body: JSON.stringify({
             username: formData.get("username"),
@@ -76,11 +81,11 @@ Boutique{% endblock %} {% block content %}
 
         const data = await response.json();
 
-        if (!response.ok || !data.token) {
+        if (!response.ok || !data.access) {
           throw new Error(data.error || "No se pudo iniciar sesión.");
         }
 
-        sessionStorage.setItem("token", data.token);
+        sessionStorage.setItem("access", data.access);
         window.location.href = '{% url "gestion" %}';
       } catch (error) {
         showMessage(

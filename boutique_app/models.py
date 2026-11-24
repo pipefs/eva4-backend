@@ -1,3 +1,6 @@
+import uuid
+from django.conf import settings
+from django.utils import timezone
 from django.db import models
 
 class Prenda(models.Model):
@@ -32,3 +35,15 @@ class Prenda(models.Model):
     stock = models.PositiveIntegerField(default=0)
     creado = models.DateTimeField(auto_now_add=True)
     actualizado = models.DateTimeField(auto_now=True)
+
+class SesionAcceso(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    refresh_jti = models.CharField(max_length=255, unique=True)
+    creada = models.DateTimeField(auto_now_add=True)
+    expira = models.DateTimeField()
+    revocada = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def activa(self):
+        return self.revocada is None and self.expira > timezone.now()
